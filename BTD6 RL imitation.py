@@ -1,4 +1,4 @@
-# btd6_imitation_improved.py
+# btd6_imitation_fixed.py
 import os
 import time
 import json
@@ -8,14 +8,14 @@ import mss
 import torch
 import torch.nn as nn
 import torch.optim as optim
-from torch.utils.data import Dataset, DataLoader
+from torch.utils.data import Dataset, DataLoader, WeightedRandomSampler
 from pynput import keyboard, mouse
 from pynput.keyboard import Key, Controller as KeyController
 from pynput.mouse import Controller as MouseController
 import pyautogui
 from datetime import datetime
 import queue
-from collections import deque
+from collections import deque, Counter
 
 # -----------------------------
 # Data collector (Enhanced)
@@ -134,6 +134,7 @@ class BTD6DataCollector:
         try:
             screenshot = sct.grab(self.game_region)
             frame = np.array(screenshot)
+            # MSS returns BGRA, convert to BGR for consistency
             frame = cv2.cvtColor(frame, cv2.COLOR_BGRA2BGR)
             return frame, time.time()
         except Exception as e:
@@ -228,7 +229,7 @@ class BTD6DataCollector:
         return frames_file, data_file
 
 # -----------------------------
-# Enhanced Dataset
+# Enhanced Dataset with Class Balancing
 # -----------------------------
 class BTD6Dataset(Dataset):
     """Enhanced dataset with position information and temporal context"""
@@ -286,7 +287,12 @@ class BTD6Dataset(Dataset):
 
         # Process labels with enhanced action representation
         self.labels = self._process_enhanced_actions()
+        
+        # Calculate class weights for balanced training
+        self.class_weights = self._calculate_class_weights()
+        
         print(f"Enhanced dataset loaded: {self._len} frames")
+        print(f"Class distribution: {self.class_weights}")
 
     def _process_enhanced_actions(self):
         """Process actions into enhanced labels including positions"""
@@ -296,9 +302,10 @@ class BTD6Dataset(Dataset):
             frame_actions = self.actions[i] if i < len(self.actions) else []
             mouse_pos = self.mouse_positions[i] if i < len(self.mouse_positions) and self.mouse_positions else (0, 0)
             
-            # Enhanced label: [action_type, x_coord, y_coord]
+            # Enhanced label: [action_type, x_coord, y_coord, needs_position]
             # action_type: 0=none, 1=left_click, 2=right_click, 3=key, 4=drag
-            label = {'action': 0, 'x': 0.0, 'y': 0.0}
+            # needs_position: whether this action requires position (for masking loss)
+            label = {'action': 0, 'x': 0.0, 'y': 0.0, 'needs_position': False}
             
             if frame_actions and isinstance(frame_actions, list):
                 for action in frame_actions:
@@ -311,22 +318,51 @@ class BTD6Dataset(Dataset):
                         label['action'] = 1 if 'left' in btn else 2
                         label['x'] = action.get('x', 0.0)
                         label['y'] = action.get('y', 0.0)
+                        label['needs_position'] = True
                         break  # Prioritize mouse clicks
                     elif action_type == 'key_press':
                         label['action'] = 3
-                        # Use mouse position at time of key press if available
-                        if 'mouse_x' in action and 'mouse_y' in action:
-                            if self.game_region:
-                                label['x'] = action['mouse_x'] / self.game_region['width']
-                                label['y'] = action['mouse_y'] / self.game_region['height']
+                        label['needs_position'] = False
                     elif action_type == 'mouse_drag':
                         label['action'] = 4
                         label['x'] = action.get('x', 0.0)
                         label['y'] = action.get('y', 0.0)
+                        label['needs_position'] = True
             
             labels.append(label)
         
         return labels
+
+    def _calculate_class_weights(self):
+        """Calculate weights for handling class imbalance"""
+        action_counts = Counter([label['action'] for label in self.labels])
+        total = sum(action_counts.values())
+        num_classes = 5  # 0-4 action types
+        
+        # Calculate inverse frequency weights
+        weights = []
+        for i in range(num_classes):
+            count = action_counts.get(i, 1)  # Avoid division by zero
+            weight = total / (num_classes * count)
+            weights.append(weight)
+        
+        # Log class distribution
+        print("Action distribution:")
+        action_names = ['none', 'left_click', 'right_click', 'key', 'drag']
+        for i in range(num_classes):
+            count = action_counts.get(i, 0)
+            percentage = (count / total) * 100 if total > 0 else 0
+            print(f"  {action_names[i]}: {count} ({percentage:.1f}%)")
+        
+        return torch.FloatTensor(weights)
+
+    def get_sample_weights(self):
+        """Get sample weights for WeightedRandomSampler to handle class imbalance"""
+        weights = []
+        for label in self.labels:
+            action = label['action']
+            weights.append(self.class_weights[action].item())
+        return weights
 
     def __len__(self):
         # Account for sequence length
@@ -348,6 +384,7 @@ class BTD6Dataset(Dataset):
                 if frame is None:
                     raise RuntimeError(f"Failed to read frame file {path}")
             
+            # Frame is already in BGR from cv2, keep it consistent
             # Enhanced preprocessing - less aggressive resize to preserve details
             frame = cv2.resize(frame, (320, 180))  # 16:9 aspect ratio, more detail
             frame = frame.astype(np.float32) / 255.0
@@ -364,8 +401,9 @@ class BTD6Dataset(Dataset):
         frames_tensor = torch.tensor(frames_array, dtype=torch.float32)
         action_tensor = torch.tensor(label['action'], dtype=torch.long)
         pos_tensor = torch.tensor([label['x'], label['y']], dtype=torch.float32)
+        needs_pos_tensor = torch.tensor(label['needs_position'], dtype=torch.bool)
         
-        return frames_tensor, action_tensor, pos_tensor
+        return frames_tensor, action_tensor, pos_tensor, needs_pos_tensor
 
 # -----------------------------
 # Enhanced Model with Temporal Processing
@@ -442,14 +480,18 @@ class BTD6ImitationNet(nn.Module):
         return action_logits, positions
 
 # -----------------------------
-# Enhanced Trainer
+# Enhanced Trainer with Masked Position Loss
 # -----------------------------
 class BTD6Trainer:
-    def __init__(self, model, device='cpu'):
+    def __init__(self, model, device='cpu', class_weights=None):
         self.model = model.to(device)
         self.device = device
-        self.action_criterion = nn.CrossEntropyLoss()
-        self.position_criterion = nn.MSELoss()
+        
+        # Use class weights for imbalanced data
+        if class_weights is not None:
+            class_weights = class_weights.to(device)
+        self.action_criterion = nn.CrossEntropyLoss(weight=class_weights)
+        self.position_criterion = nn.MSELoss(reduction='none')  # Element-wise loss for masking
         self.optimizer = optim.Adam(model.parameters(), lr=1e-4)
         
         # Loss weights
@@ -462,19 +504,34 @@ class BTD6Trainer:
         action_correct = 0
         total = 0
         position_error = 0.0
+        position_samples = 0
 
-        for batch_idx, (frames, actions, positions) in enumerate(train_loader):
+        for batch_idx, (frames, actions, positions, needs_pos) in enumerate(train_loader):
             frames = frames.to(self.device)
             actions = actions.to(self.device)
             positions = positions.to(self.device)
+            needs_pos = needs_pos.to(self.device)
             
             self.optimizer.zero_grad()
             
             action_logits, pred_positions = self.model(frames)
             
-            # Calculate losses
+            # Calculate action loss
             action_loss = self.action_criterion(action_logits, actions)
-            position_loss = self.position_criterion(pred_positions, positions)
+            
+            # Calculate masked position loss (only for actions that need position)
+            pos_loss_raw = self.position_criterion(pred_positions, positions)
+            pos_loss_per_sample = pos_loss_raw.mean(dim=1)  # Average over x,y
+            
+            # Mask: only apply loss where position is needed
+            masked_pos_loss = pos_loss_per_sample * needs_pos.float()
+            
+            # Average over samples that need position (avoid division by zero)
+            num_pos_samples = needs_pos.sum().item()
+            if num_pos_samples > 0:
+                position_loss = masked_pos_loss.sum() / num_pos_samples
+            else:
+                position_loss = torch.tensor(0.0, device=self.device)
             
             # Combined loss
             loss = self.action_weight * action_loss + self.position_weight * position_loss
@@ -487,16 +544,20 @@ class BTD6Trainer:
             pred = action_logits.argmax(dim=1)
             action_correct += (pred == actions).sum().item()
             total += actions.size(0)
-            position_error += position_loss.item()
+            
+            if num_pos_samples > 0:
+                position_error += position_loss.item() * num_pos_samples
+                position_samples += num_pos_samples
 
             if batch_idx % 10 == 0:
                 print(f'Batch {batch_idx}, Loss: {loss.item():.4f}, '
                       f'Action Loss: {action_loss.item():.4f}, '
-                      f'Position Loss: {position_loss.item():.4f}')
+                      f'Position Loss: {position_loss.item():.4f}, '
+                      f'Pos Samples: {num_pos_samples}')
 
         avg_loss = total_loss / max(1, len(train_loader))
         action_accuracy = 100.0 * action_correct / max(1, total)
-        avg_position_error = position_error / max(1, len(train_loader))
+        avg_position_error = position_error / max(1, position_samples) if position_samples > 0 else 0
         
         return avg_loss, action_accuracy, avg_position_error
 
@@ -506,33 +567,50 @@ class BTD6Trainer:
         action_correct = 0
         total = 0
         position_error = 0.0
+        position_samples = 0
         
         with torch.no_grad():
-            for frames, actions, positions in val_loader:
+            for frames, actions, positions, needs_pos in val_loader:
                 frames = frames.to(self.device)
                 actions = actions.to(self.device)
                 positions = positions.to(self.device)
+                needs_pos = needs_pos.to(self.device)
                 
                 action_logits, pred_positions = self.model(frames)
                 
+                # Calculate action loss
                 action_loss = self.action_criterion(action_logits, actions)
-                position_loss = self.position_criterion(pred_positions, positions)
+                
+                # Calculate masked position loss
+                pos_loss_raw = self.position_criterion(pred_positions, positions)
+                pos_loss_per_sample = pos_loss_raw.mean(dim=1)
+                masked_pos_loss = pos_loss_per_sample * needs_pos.float()
+                
+                num_pos_samples = needs_pos.sum().item()
+                if num_pos_samples > 0:
+                    position_loss = masked_pos_loss.sum() / num_pos_samples
+                else:
+                    position_loss = torch.tensor(0.0, device=self.device)
+                
                 loss = self.action_weight * action_loss + self.position_weight * position_loss
                 
                 val_loss += loss.item()
                 pred = action_logits.argmax(dim=1)
                 action_correct += (pred == actions).sum().item()
                 total += actions.size(0)
-                position_error += position_loss.item()
+                
+                if num_pos_samples > 0:
+                    position_error += position_loss.item() * num_pos_samples
+                    position_samples += num_pos_samples
         
         avg_loss = val_loss / max(1, len(val_loader))
         action_accuracy = 100.0 * action_correct / max(1, total)
-        avg_position_error = position_error / max(1, len(val_loader))
+        avg_position_error = position_error / max(1, position_samples) if position_samples > 0 else 0
         
         return avg_loss, action_accuracy, avg_position_error
 
     def train(self, train_loader, val_loader, epochs=50, save_path='best_btd6_model.pth'):
-        print("Starting enhanced training...")
+        print("Starting enhanced training with masked position loss...")
         best_val_loss = float('inf')
         
         for epoch in range(epochs):
@@ -557,7 +635,7 @@ class BTD6Trainer:
                 print(f'✓ New best model saved! Val Loss: {val_loss:.4f}')
 
 # -----------------------------
-# Enhanced Controller
+# Enhanced Controller with Fixed Execution
 # -----------------------------
 class BTD6Controller:
     def __init__(self, model_path, game_region=None, sequence_length=5, num_actions=5):
@@ -577,23 +655,32 @@ class BTD6Controller:
         
         # Controllers
         self.kb = KeyController()
-        self.mouse = MouseController()
+        
+        # Fixed: Safe checkpoint access with defaults
+        val_loss = checkpoint.get('val_loss', 'N/A')
+        val_acc = checkpoint.get('val_acc', 'N/A')
+        val_pos_err = checkpoint.get('val_pos_err', 'N/A')
         
         print(f"Enhanced BTD6 Controller loaded")
-        print(f"Model checkpoint - Val Loss: {checkpoint.get('val_loss', 'N/A'):.4f}, "
-              f"Val Acc: {checkpoint.get('val_acc', 'N/A'):.2f}%")
+        print(f"Model checkpoint - Val Loss: {val_loss if val_loss != 'N/A' else 'N/A':.4f' if val_loss != 'N/A' else 'N/A'}, "
+              f"Val Acc: {val_acc if val_acc != 'N/A' else 'N/A':.2f' if val_acc != 'N/A' else 'N/A'}%, "
+              f"Pos Error: {val_pos_err if val_pos_err != 'N/A' else 'N/A':.4f' if val_pos_err != 'N/A' else 'N/A'}")
         print(f"Using device: {self.device}")
 
     def preprocess_frame(self, frame):
+        # Frame is already BGR from mss capture, keep consistent
         frame = cv2.resize(frame, (320, 180))
         frame = frame.astype(np.float32) / 255.0
         return frame
 
     def execute_enhanced_action(self, action_id, x_norm, y_norm):
-        """Execute action with precise positioning"""
+        """Execute action with precise positioning - Fixed with consistent pyautogui usage"""
         # Convert normalized coordinates to screen coordinates
         x = int(self.game_region['left'] + x_norm * self.game_region['width'])
         y = int(self.game_region['top'] + y_norm * self.game_region['height'])
+        
+        # Log predicted positions for debugging
+        action_names = ['none', 'left_click', 'right_click', 'key', 'drag']
         
         if action_id == 0:
             # No action
@@ -601,26 +688,30 @@ class BTD6Controller:
         elif action_id == 1:
             # Left click at specific position
             pyautogui.click(x, y)
-            print(f"Left click at ({x}, {y})")
+            print(f"[{action_names[action_id]}] at ({x}, {y}) - norm: ({x_norm:.3f}, {y_norm:.3f})")
         elif action_id == 2:
             # Right click at specific position
             pyautogui.rightClick(x, y)
-            print(f"Right click at ({x}, {y})")
+            print(f"[{action_names[action_id]}] at ({x}, {y}) - norm: ({x_norm:.3f}, {y_norm:.3f})")
         elif action_id == 3:
             # Key press (space for start/pause)
             self.kb.press(Key.space)
             self.kb.release(Key.space)
-            print("Space key pressed")
+            print(f"[{action_names[action_id]}] Space key")
         elif action_id == 4:
-            # Drag (for camera movement)
-            pyautogui.drag(x - self.mouse.position[0], y - self.mouse.position[1], duration=0.2)
-            print(f"Drag to ({x}, {y})")
+            # Fixed: Use pyautogui consistently for drag
+            current_x, current_y = pyautogui.position()
+            pyautogui.dragTo(x, y, duration=0.2, button='left')
+            print(f"[{action_names[action_id]}] from ({current_x}, {current_y}) to ({x}, {y})")
 
     def play(self, duration=60, fps=5):
         print(f"Starting enhanced automated play for {duration} seconds...")
         start_time = time.time()
         frame_count = 0
         frame_interval = 1.0 / fps
+        
+        # Action statistics tracking
+        action_counts = Counter()
 
         try:
             with mss.mss() as sct:
@@ -629,7 +720,7 @@ class BTD6Controller:
                 for _ in range(self.sequence_length):
                     shot = sct.grab(self.game_region)
                     frame = np.array(shot)
-                    frame = cv2.cvtColor(frame, cv2.COLOR_BGRA2BGR)
+                    frame = cv2.cvtColor(frame, cv2.COLOR_BGRA2BGR)  # Consistent BGR
                     processed = self.preprocess_frame(frame)
                     self.frame_buffer.append(processed)
                     time.sleep(0.1)
@@ -641,7 +732,7 @@ class BTD6Controller:
                     # Capture new frame
                     shot = sct.grab(self.game_region)
                     frame = np.array(shot)
-                    frame = cv2.cvtColor(frame, cv2.COLOR_BGRA2BGR)
+                    frame = cv2.cvtColor(frame, cv2.COLOR_BGRA2BGR)  # Consistent BGR
                     processed = self.preprocess_frame(frame)
                     self.frame_buffer.append(processed)
                     
@@ -657,8 +748,9 @@ class BTD6Controller:
                         x_norm = positions[0, 0].item()
                         y_norm = positions[0, 1].item()
                     
-                    # Execute action
+                    # Execute action and track statistics
                     self.execute_enhanced_action(action, x_norm, y_norm)
+                    action_counts[action] += 1
                     
                     frame_count += 1
                     if frame_count % 30 == 0:
@@ -672,17 +764,31 @@ class BTD6Controller:
         except KeyboardInterrupt:
             print("\nAutomated play stopped by user")
         
-        print(f"Automated play complete. Processed {frame_count} frames")
+        # Print action statistics
+        print(f"\nAutomated play complete. Processed {frame_count} frames")
+        print("\nAction statistics:")
+        action_names = ['none', 'left_click', 'right_click', 'key', 'drag']
+        for action_id in range(5):
+            count = action_counts[action_id]
+            percentage = (count / frame_count * 100) if frame_count > 0 else 0
+            print(f"  {action_names[action_id]}: {count} ({percentage:.1f}%)")
 
 # -----------------------------
-# Main CLI (Enhanced)
+# Main CLI (Enhanced with Class Balancing)
 # -----------------------------
 def main():
     pyautogui.PAUSE = 0.01
     pyautogui.FAILSAFE = True
 
     print("=" * 50)
-    print("BTD6 AI Imitation Learning System (Enhanced)")
+    print("BTD6 AI Imitation Learning System (Fixed)")
+    print("=" * 50)
+    print("Fixes applied:")
+    print("✓ Checkpoint loading with safe defaults")
+    print("✓ Masked position loss (only for clicks/drags)")
+    print("✓ Consistent pyautogui usage for actions")
+    print("✓ Class weighting for imbalanced data")
+    print("✓ Position logging for debugging")
     print("=" * 50)
 
     mode = input("\nChoose mode:\n1. Collect data\n2. Train model\n3. Play with trained model\nEnter choice (1/2/3): ").strip()
@@ -725,14 +831,23 @@ def main():
         sequence_length = int(input("Sequence length for temporal context (default 5): ") or "5")
         dataset = BTD6Dataset(frames_source, actions_file, sequence_length=sequence_length)
         
+        # Get class weights and sample weights for balancing
+        class_weights = dataset.class_weights
+        sample_weights = dataset.get_sample_weights()
+        
         # Split dataset
         train_size = int(0.8 * len(dataset))
         val_size = len(dataset) - train_size
         train_dataset, val_dataset = torch.utils.data.random_split(dataset, [train_size, val_size])
         
+        # Create weighted sampler for balanced training
+        train_indices = train_dataset.indices
+        train_weights = [sample_weights[i] for i in train_indices]
+        sampler = WeightedRandomSampler(train_weights, len(train_weights))
+        
         # Create data loaders
         batch_size = int(input("Batch size (default 8): ") or "8")
-        train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, num_workers=2)
+        train_loader = DataLoader(train_dataset, batch_size=batch_size, sampler=sampler, num_workers=2)
         val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False, num_workers=2)
         
         # Setup training
@@ -740,16 +855,16 @@ def main():
         print(f"Using device: {device}")
         
         model = BTD6ImitationNet(num_actions=5, sequence_length=sequence_length)
-        trainer = BTD6Trainer(model, device)
+        trainer = BTD6Trainer(model, device, class_weights=class_weights)
         
         epochs = int(input("Number of epochs (default 30): ") or "30")
-        trainer.train(train_loader, val_loader, epochs, save_path='best_btd6_model_enhanced.pth')
+        trainer.train(train_loader, val_loader, epochs, save_path='best_btd6_model_fixed.pth')
         
         print("\n✓ Training complete!")
 
     elif mode == '3':
         print("\n--- Play Mode ---")
-        model_path = input("Enter model path (default 'best_btd6_model_enhanced.pth'): ") or "best_btd6_model_enhanced.pth"
+        model_path = input("Enter model path (default 'best_btd6_model_fixed.pth'): ") or "best_btd6_model_fixed.pth"
         
         if not os.path.exists(model_path):
             print("❌ Model not found!")
