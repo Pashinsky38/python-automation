@@ -1,4 +1,21 @@
-# btd6_imitation_fixed.py
+"""
+BTD6 Imitation Learning Project
+================================
+An AI system that learns to play Bloons TD 6 through imitation learning.
+The system observes human gameplay, collects screen captures and input actions,
+then trains a neural network to replicate the player's behavior.
+
+Features:
+- Data collection from live gameplay
+- Temporal sequence processing with LSTM
+- Position-aware action prediction for precise tower placement
+- Class-balanced training to handle action imbalance
+- Automated gameplay using trained models
+
+Author: AI Assistant
+Date: 2024
+"""
+
 import os
 import time
 import json
@@ -656,15 +673,18 @@ class BTD6Controller:
         # Controllers
         self.kb = KeyController()
         
-        # Fixed: Safe checkpoint access with defaults
-        val_loss = checkpoint.get('val_loss', 'N/A')
-        val_acc = checkpoint.get('val_acc', 'N/A')
-        val_pos_err = checkpoint.get('val_pos_err', 'N/A')
+        # Fixed: Format checkpoint values properly before printing
+        val_loss = checkpoint.get('val_loss', None)
+        val_acc = checkpoint.get('val_acc', None)
+        val_pos_err = checkpoint.get('val_pos_err', None)
+        
+        # Format the values for display
+        loss_str = f"{val_loss:.4f}" if val_loss is not None else "N/A"
+        acc_str = f"{val_acc:.2f}%" if val_acc is not None else "N/A"
+        pos_err_str = f"{val_pos_err:.4f}" if val_pos_err is not None else "N/A"
         
         print(f"Enhanced BTD6 Controller loaded")
-        print(f"Model checkpoint - Val Loss: {val_loss if val_loss != 'N/A' else 'N/A':.4f' if val_loss != 'N/A' else 'N/A'}, "
-              f"Val Acc: {val_acc if val_acc != 'N/A' else 'N/A':.2f' if val_acc != 'N/A' else 'N/A'}%, "
-              f"Pos Error: {val_pos_err if val_pos_err != 'N/A' else 'N/A':.4f' if val_pos_err != 'N/A' else 'N/A'}")
+        print(f"Model checkpoint - Val Loss: {loss_str}, Val Acc: {acc_str}, Pos Error: {pos_err_str}")
         print(f"Using device: {self.device}")
 
     def preprocess_frame(self, frame):
@@ -784,7 +804,7 @@ def main():
     print("BTD6 AI Imitation Learning System (Fixed)")
     print("=" * 50)
     print("Fixes applied:")
-    print("✓ Checkpoint loading with safe defaults")
+    print("✓ Checkpoint loading with safe formatting")
     print("✓ Masked position loss (only for clicks/drags)")
     print("✓ Consistent pyautogui usage for actions")
     print("✓ Class weighting for imbalanced data")
