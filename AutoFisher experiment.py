@@ -1,3 +1,34 @@
+"""
+Hypixel Skyblock Auto Fisher
+=============================
+
+A computer vision-based auto-fishing bot for Hypixel Skyblock that detects the 
+three exclamation marks (!!!) that appear above the bobber when a fish is caught.
+
+How it works:
+- Uses OpenCV template matching to detect the exclamation marks pattern
+- Performs a right-click when detected to catch the fish
+- Automatically throws the rod again after catching
+- Includes reset mechanism if no fish is caught within timeout period
+- Adds human-like reaction delays and random behaviors to appear more natural
+
+Setup:
+1. Take a screenshot of the three exclamation marks that appear when fishing
+2. Save it as "exclamation_marks.png" in the same directory as this script
+3. Run the script and choose your detection region
+4. The bot will start fishing after a 5-second countdown
+
+Note on Detection Speed:
+Due to server lag in Hypixel, players get visual indicators before the fish 
+actually arrives, allowing them to prepare for the click. Combined with the 
+exclamation marks appearing on screen, fast reaction times (30-100ms) are 
+achievable by skilled players who are ready to click. This bot simulates that
+prepared, fast reaction rather than superhuman reflexes.
+
+Controls:
+- ESC: Stop the bot at any time
+"""
+
 import pyautogui
 import cv2
 import numpy as np
@@ -7,7 +38,17 @@ import keyboard
 
 class AutoFisher:
     def __init__(self, exclamation_image_path):
+        # Load and validate the template image
         self.exclamation_template = cv2.imread(exclamation_image_path, 0)
+        
+        if self.exclamation_template is None:
+            raise FileNotFoundError(
+                f"Could not load template image at '{exclamation_image_path}'. "
+                "Please ensure the file exists and is a valid image format."
+            )
+        
+        print(f"Template loaded successfully: {self.exclamation_template.shape}")
+        
         self.running = False
         self.last_catch_time = 0
         self.last_throw_time = 0
@@ -20,13 +61,16 @@ class AutoFisher:
         self.throw_delay_max = 0.3     # Much faster max delay before throwing again
         
         # Reset mechanism
-        self.reset_timeout = 12.0     # Reset after 10 seconds of no detection
+        self.reset_timeout = 12.0     # Reset after 12 seconds of no detection
         
         # Detection threshold (lower for faster detection)
         self.threshold = 0.58  # Slightly lower threshold for faster matching
         
         # Fast detection settings
-        self.detection_interval = 0.01  # Check every 10ms for even faster detection
+        self.detection_interval = 0.03  # Check every 30ms for even faster detection
+        
+        # Behavior probabilities (adjust these to tune randomness)
+        self.break_chance = 0.01       # 1% chance of taking a short break
         
     def setup_fishing_area(self):
         """Let user select the fishing area on screen"""
@@ -42,7 +86,13 @@ class AutoFisher:
             
         x2, y2 = pyautogui.position()
         
-        self.fishing_region = (x1, y1, x2-x1, y2-y1)
+        # Normalize to ensure positive width and height
+        left = min(x1, x2)
+        top = min(y1, y2)
+        width = abs(x2 - x1)
+        height = abs(y2 - y1)
+        
+        self.fishing_region = (left, top, width, height)
         print(f"Fishing area set: {self.fishing_region}")
     
     def setup_left_side_region(self):
@@ -50,7 +100,6 @@ class AutoFisher:
         screen_width, screen_height = pyautogui.size()
         
         # Set region to left half of screen
-        # You can adjust these values as needed
         left_width = screen_width // 2  # Left half
         
         self.fishing_region = (0, 0, left_width, screen_height)
@@ -62,9 +111,11 @@ class AutoFisher:
         if self.fishing_region:
             # Capture only the fishing region for faster processing
             screenshot = pyautogui.screenshot(region=self.fishing_region)
+            region_offset_x, region_offset_y = self.fishing_region[0], self.fishing_region[1]
         else:
             # Capture full screen
             screenshot = pyautogui.screenshot()
+            region_offset_x, region_offset_y = 0, 0
             
         # Convert to OpenCV format
         screenshot_np = np.array(screenshot)
@@ -75,22 +126,14 @@ class AutoFisher:
         min_val, max_val, min_loc, max_loc = cv2.minMaxLoc(result)
         
         if max_val >= self.threshold:
-            # Found exclamation marks
-            return True, max_loc
+            # Convert relative coordinates to absolute screen coordinates
+            absolute_x = max_loc[0] + region_offset_x
+            absolute_y = max_loc[1] + region_offset_y
+            return True, (absolute_x, absolute_y)
         return False, None
     
     def human_like_click(self):
-        """Perform a right-click with minimal delay for fast catching"""
-        # For 0-1 second windows, we need to be much faster
-        # Still add tiny randomness but keep it quick
-        current_x, current_y = pyautogui.position()
-        offset_x = random.randint(-2, 2)  # Smaller offset for speed
-        offset_y = random.randint(-2, 2)
-        
-        # Very quick movement
-        pyautogui.moveTo(current_x + offset_x, current_y + offset_y, 
-                        duration=random.uniform(0.01, 0.05))  # Much faster
-        
+        """Perform a right-click to catch fish"""
         # Right click to catch fish
         pyautogui.rightClick()
         print("Quick catch attempt!")
@@ -132,27 +175,7 @@ class AutoFisher:
     
     def add_human_behavior(self):
         """Add random human-like behaviors"""
-        if random.random() < 0.1:  # 10% chance
-            # Random small mouse movement
-            current_x, current_y = pyautogui.position()
-            new_x = current_x + random.randint(-50, 50)
-            new_y = current_y + random.randint(-50, 50)
-            pyautogui.moveTo(new_x, new_y, duration=random.uniform(0.5, 1.5))
-            
-        if random.random() < 0.05:  # 5% chance
-            # Random short break
-            break_time = random.uniform(2, 8)
-            print(f"Taking a {break_time:.1f}s break...")
-            time.sleep(break_time)
-        """Add random human-like behaviors"""
-        if random.random() < 0.1:  # 10% chance
-            # Random small mouse movement
-            current_x, current_y = pyautogui.position()
-            new_x = current_x + random.randint(-50, 50)
-            new_y = current_y + random.randint(-50, 50)
-            pyautogui.moveTo(new_x, new_y, duration=random.uniform(0.5, 1.5))
-            
-        if random.random() < 0.05:  # 5% chance
+        if random.random() < self.break_chance:
             # Random short break
             break_time = random.uniform(2, 8)
             print(f"Taking a {break_time:.1f}s break...")
@@ -203,9 +226,8 @@ class AutoFisher:
                     # Record catch time
                     self.last_catch_time = time.time()
                 
-                # Reduce human behaviors frequency during active fishing
-                if random.random() < 0.02:  # Reduced from 0.1 to 0.02 for speed
-                    self.add_human_behavior()
+                # Add occasional human behaviors during active fishing
+                self.add_human_behavior()
                 
                 # Much smaller delay for faster detection loop
                 time.sleep(self.detection_interval)
@@ -245,11 +267,13 @@ def main():
         # Start fishing
         fisher.run()
         
-    except FileNotFoundError:
-        print(f"Error: Could not find exclamation marks image at {exclamation_image_path}")
-        print("Please make sure the image file exists and the path is correct.")
+    except FileNotFoundError as e:
+        print(f"Error: {e}")
+        print("Please make sure the exclamation_marks.png file exists and the path is correct.")
     except Exception as e:
         print(f"An error occurred: {e}")
+        import traceback
+        traceback.print_exc()
 
 if __name__ == "__main__":
     main()
