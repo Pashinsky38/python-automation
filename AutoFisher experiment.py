@@ -15,7 +15,7 @@ How it works:
 Setup:
 1. Take a screenshot of the three exclamation marks that appear when fishing
 2. Save it as "exclamation_marks.png" in the same directory as this script
-3. Run the script and choose your detection region
+3. Run the script
 4. The bot will start fishing after a 5-second countdown
 
 Note on Detection Speed:
@@ -51,7 +51,7 @@ class AutoFisher:
         
         self.running = False
         self.last_throw_time = 0
-        self.fishing_region = None  # You can set this to focus on a specific screen area
+        self.fishing_region = None
         
         # Human-like timing parameters
         self.reaction_time_min = 0.03  # Very fast minimum reaction time
@@ -72,29 +72,6 @@ class AutoFisher:
         # Behavior probabilities (adjust these to tune randomness)
         self.break_chance = 0.01       # 1% chance of taking a short break
         
-    def setup_fishing_area(self):
-        """Let user select the fishing area on screen"""
-        print("Move your mouse to the top-left corner of the fishing area and press 'q'")
-        while not keyboard.is_pressed('q'):
-            time.sleep(0.1)
-        
-        x1, y1 = pyautogui.position()
-        
-        print("Now move to bottom-right corner and press 'q'")
-        while not keyboard.is_pressed('q'):
-            time.sleep(0.1)
-            
-        x2, y2 = pyautogui.position()
-        
-        # Normalize to ensure positive width and height
-        left = min(x1, x2)
-        top = min(y1, y2)
-        width = abs(x2 - x1)
-        height = abs(y2 - y1)
-        
-        self.fishing_region = (left, top, width, height)
-        print(f"Fishing area set: {self.fishing_region}")
-    
     def setup_center_left_region(self):
         """Set a small focused region slightly left of screen center for exclamation marks"""
         screen_width, screen_height = pyautogui.size()
@@ -121,12 +98,8 @@ class AutoFisher:
         
     def detect_exclamation_marks(self):
         """Detect the exclamation marks pattern on screen - optimized for speed"""
-        if self.fishing_region:
-            # Capture only the fishing region for faster processing
-            screenshot = pyautogui.screenshot(region=self.fishing_region)
-        else:
-            # Capture full screen
-            screenshot = pyautogui.screenshot()
+        # Capture only the fishing region for faster processing
+        screenshot = pyautogui.screenshot(region=self.fishing_region)
             
         # Convert to OpenCV format
         screenshot_np = np.array(screenshot)
@@ -253,23 +226,8 @@ def main():
     try:
         fisher = AutoFisher(exclamation_image_path)
         
-        # Setup options
-        print("Choose fishing region setup:")
-        print("1. Small focused region (slightly left of center) - RECOMMENDED")
-        print("2. Custom region (manual selection)")
-        print("3. Full screen")
-        
-        choice = input("Enter choice (1/2/3): ").strip()
-        
-        if choice == "1":
-            fisher.setup_center_left_region()
-        elif choice == "2":
-            fisher.setup_fishing_area()
-        elif choice == "3":
-            print("Using full screen detection")
-        else:
-            print("Invalid choice, using focused region by default")
-            fisher.setup_center_left_region()
+        # Setup optimized detection region
+        fisher.setup_center_left_region()
         
         # Start fishing
         fisher.run()
