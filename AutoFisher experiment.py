@@ -67,7 +67,7 @@ class AutoFisher:
         self.threshold = 0.58  # Slightly lower threshold for faster matching
         
         # Fast detection settings
-        self.detection_interval = 0.03  # Check every 30ms for even faster detection
+        self.detection_interval = 0.05  # Check every 50ms detection
         
         # Behavior probabilities (adjust these to tune randomness)
         self.break_chance = 0.01       # 1% chance of taking a short break
