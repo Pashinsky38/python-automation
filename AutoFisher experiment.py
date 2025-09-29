@@ -64,10 +64,10 @@ class AutoFisher:
         self.reset_timeout_max = 15.0  # Maximum time before reset
         
         # Detection threshold (lower for faster detection)
-        self.threshold = 0.55  # Slightly lower threshold for faster matching
+        self.threshold = 0.4  # Slightly lower threshold for faster matching
         
         # Fast detection settings
-        self.detection_interval = 0.03  # Check every 30ms for even faster detection
+        self.detection_interval = 0.01  # Check every 10ms for detection
         
         # Behavior probabilities (adjust these to tune randomness)
         self.break_chance = 0.01       # 1% chance of taking a short break
@@ -95,32 +95,29 @@ class AutoFisher:
         self.fishing_region = (left, top, width, height)
         print(f"Fishing area set: {self.fishing_region}")
     
-    def setup_left_side_region(self):
-        """Automatically set fishing region to optimized left side area"""
+    def setup_center_left_region(self):
+        """Set a small focused region slightly left of screen center for exclamation marks"""
         screen_width, screen_height = pyautogui.size()
         
-        # Start with left half of screen
-        left_width = screen_width // 2
+        # Create a focused box for the exclamation marks
+        # Optimized for 2560x1440 resolution where marks appear ~140 pixels left of center
+        box_width = 350   # Slightly wider for better coverage
+        box_height = 280  # Good height for bobber movement
         
-        # Remove top quarter
-        top_offset = screen_height // 4
+        # Position: left of center where exclamation marks appear
+        # For 2560x1440: center is 1280, marks at ~1140, so offset by 140
+        left_offset = 140  # Pixels left from center (optimized for your resolution)
+        region_left = (screen_width // 2) - left_offset - (box_width // 2)
         
-        # Remove left third (from the left edge)
-        left_offset = left_width // 3
+        # Vertically: slightly above center where bobber typically floats
+        vertical_offset = 20  # Slightly above perfect center
+        region_top = (screen_height // 2) - (box_height // 2) - vertical_offset
         
-        # Remove bottom quarter
-        bottom_offset = screen_height // 4
-        
-        # Calculate the actual region dimensions
-        region_left = left_offset
-        region_top = top_offset
-        region_width = left_width - left_offset
-        region_height = screen_height - top_offset - bottom_offset
-        
-        self.fishing_region = (region_left, region_top, region_width, region_height)
-        print(f"Optimized fishing region set: {self.fishing_region}")
-        print(f"Monitoring {region_width}x{region_height} pixels")
-        print(f"Region: X={region_left} to {region_left + region_width}, Y={region_top} to {region_top + region_height}")
+        self.fishing_region = (region_left, region_top, box_width, box_height)
+        print(f"Focused detection region set: {self.fishing_region}")
+        print(f"Monitoring {box_width}x{box_height} pixel area")
+        print(f"Region center: X={region_left + box_width//2}, Y={region_top + box_height//2}")
+        print(f"(Optimized for 2560x1440 - positioned left of center)")
         
     def detect_exclamation_marks(self):
         """Detect the exclamation marks pattern on screen - optimized for speed"""
@@ -258,21 +255,21 @@ def main():
         
         # Setup options
         print("Choose fishing region setup:")
-        print("1. Left side of screen (automatic)")
+        print("1. Small focused region (slightly left of center) - RECOMMENDED")
         print("2. Custom region (manual selection)")
         print("3. Full screen")
         
         choice = input("Enter choice (1/2/3): ").strip()
         
         if choice == "1":
-            fisher.setup_left_side_region()
+            fisher.setup_center_left_region()
         elif choice == "2":
             fisher.setup_fishing_area()
         elif choice == "3":
             print("Using full screen detection")
         else:
-            print("Invalid choice, using left side by default")
-            fisher.setup_left_side_region()
+            print("Invalid choice, using focused region by default")
+            fisher.setup_center_left_region()
         
         # Start fishing
         fisher.run()
