@@ -50,7 +50,6 @@ class AutoFisher:
         print(f"Template loaded successfully: {self.exclamation_template.shape}")
         
         self.running = False
-        self.last_catch_time = 0
         self.last_throw_time = 0
         self.fishing_region = None  # You can set this to focus on a specific screen area
         
@@ -61,13 +60,14 @@ class AutoFisher:
         self.throw_delay_max = 0.3     # Much faster max delay before throwing again
         
         # Reset mechanism
-        self.reset_timeout = 12.0     # Reset after 12 seconds of no detection
+        self.reset_timeout_min = 12.0  # Minimum time before reset
+        self.reset_timeout_max = 15.0  # Maximum time before reset
         
         # Detection threshold (lower for faster detection)
-        self.threshold = 0.58  # Slightly lower threshold for faster matching
+        self.threshold = 0.55  # Slightly lower threshold for faster matching
         
         # Fast detection settings
-        self.detection_interval = 0.05  # Check every 50ms detection
+        self.detection_interval = 0.03  # Check every 30ms for even faster detection
         
         # Behavior probabilities (adjust these to tune randomness)
         self.break_chance = 0.01       # 1% chance of taking a short break
@@ -96,26 +96,40 @@ class AutoFisher:
         print(f"Fishing area set: {self.fishing_region}")
     
     def setup_left_side_region(self):
-        """Automatically set fishing region to left half of screen"""
+        """Automatically set fishing region to optimized left side area"""
         screen_width, screen_height = pyautogui.size()
         
-        # Set region to left half of screen
-        left_width = screen_width // 2  # Left half
+        # Start with left half of screen
+        left_width = screen_width // 2
         
-        self.fishing_region = (0, 0, left_width, screen_height)
-        print(f"Left side fishing region set: {self.fishing_region}")
-        print(f"Monitoring left {left_width}x{screen_height} pixels of screen")
+        # Remove top quarter
+        top_offset = screen_height // 4
+        
+        # Remove left third (from the left edge)
+        left_offset = left_width // 3
+        
+        # Remove bottom quarter
+        bottom_offset = screen_height // 4
+        
+        # Calculate the actual region dimensions
+        region_left = left_offset
+        region_top = top_offset
+        region_width = left_width - left_offset
+        region_height = screen_height - top_offset - bottom_offset
+        
+        self.fishing_region = (region_left, region_top, region_width, region_height)
+        print(f"Optimized fishing region set: {self.fishing_region}")
+        print(f"Monitoring {region_width}x{region_height} pixels")
+        print(f"Region: X={region_left} to {region_left + region_width}, Y={region_top} to {region_top + region_height}")
         
     def detect_exclamation_marks(self):
         """Detect the exclamation marks pattern on screen - optimized for speed"""
         if self.fishing_region:
             # Capture only the fishing region for faster processing
             screenshot = pyautogui.screenshot(region=self.fishing_region)
-            region_offset_x, region_offset_y = self.fishing_region[0], self.fishing_region[1]
         else:
             # Capture full screen
             screenshot = pyautogui.screenshot()
-            region_offset_x, region_offset_y = 0, 0
             
         # Convert to OpenCV format
         screenshot_np = np.array(screenshot)
@@ -125,12 +139,7 @@ class AutoFisher:
         result = cv2.matchTemplate(screenshot_gray, self.exclamation_template, cv2.TM_CCOEFF_NORMED)
         min_val, max_val, min_loc, max_loc = cv2.minMaxLoc(result)
         
-        if max_val >= self.threshold:
-            # Convert relative coordinates to absolute screen coordinates
-            absolute_x = max_loc[0] + region_offset_x
-            absolute_y = max_loc[1] + region_offset_y
-            return True, (absolute_x, absolute_y)
-        return False, None
+        return max_val >= self.threshold
     
     def human_like_click(self):
         """Perform a right-click to catch fish"""
@@ -146,15 +155,19 @@ class AutoFisher:
         # Right click to throw
         pyautogui.rightClick()
         self.last_throw_time = time.time()  # Record throw time
-        print(f"Rod thrown after {delay:.2f}s delay")
+        
+        # Set a random timeout for this throw
+        self.current_reset_timeout = random.uniform(self.reset_timeout_min, self.reset_timeout_max)
+        
+        print(f"Rod thrown after {delay:.2f}s delay (timeout: {self.current_reset_timeout:.1f}s)")
         
     def check_for_reset(self):
         """Check if we need to reset due to timeout"""
         current_time = time.time()
         time_since_throw = current_time - self.last_throw_time
         
-        if time_since_throw > self.reset_timeout:
-            print(f"No fish caught for {self.reset_timeout}s, resetting...")
+        if time_since_throw > self.current_reset_timeout:
+            print(f"No fish caught for {self.current_reset_timeout:.1f}s, resetting...")
             self.reset_fishing()
             return True
         return False
@@ -207,7 +220,7 @@ class AutoFisher:
                     continue
                 
                 # Look for exclamation marks
-                detected, location = self.detect_exclamation_marks()
+                detected = self.detect_exclamation_marks()
                 
                 if detected:
                     # IMMEDIATE response for 0-1 second window
@@ -222,9 +235,6 @@ class AutoFisher:
                     
                     # Throw again after delay
                     self.throw_fishing_rod()
-                    
-                    # Record catch time
-                    self.last_catch_time = time.time()
                 
                 # Add occasional human behaviors during active fishing
                 self.add_human_behavior()
