@@ -60,17 +60,17 @@ class AutoFisher:
         self.throw_delay_max = 0.3     # Much faster max delay before throwing again
         
         # Reset mechanism
-        self.reset_timeout_min = 12.0  # Minimum time before reset
-        self.reset_timeout_max = 15.0  # Maximum time before reset
+        self.reset_timeout_min = 15.0  # Minimum time before reset
+        self.reset_timeout_max = 20.0  # Maximum time before reset
         
         # Detection threshold (lower for faster detection)
-        self.threshold = 0.4  # Slightly lower threshold for faster matching
+        self.threshold = 0.8  # Slightly lower threshold for faster matching
         
         # Fast detection settings
-        self.detection_interval = 0.01  # Check every 10ms for detection
+        self.detection_interval = 0.03  # Check every 30ms for detection
         
         # Behavior probabilities (adjust these to tune randomness)
-        self.break_chance = 0.01       # 1% chance of taking a short break
+        self.break_chance = 0.00       # 1% chance of taking a short break
         
     def setup_center_left_region(self):
         """Set a small focused region slightly left of screen center for exclamation marks"""
