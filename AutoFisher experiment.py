@@ -11,6 +11,7 @@ How it works:
 - Automatically throws the rod again after catching
 - Includes reset mechanism if no fish is caught within timeout period
 - Adds human-like reaction delays and random behaviors to appear more natural
+- Safety timer automatically stops the bot after 1 hour
 
 Setup:
 1. Take a screenshot of the three exclamation marks that appear when fishing
@@ -27,6 +28,7 @@ prepared, fast reaction rather than superhuman reflexes.
 
 Controls:
 - LEFT CLICK: Stop the bot at any time
+- Automatic safety stop after 1 hour
 """
 
 import pyautogui
@@ -72,6 +74,10 @@ class AutoFisher:
         
         # Behavior probabilities (adjust these to tune randomness)
         self.break_chance = 0.00       # 1% chance of taking a short break
+        
+        # Safety stop timer (in seconds)
+        self.safety_stop_timer = 60 * 5  # minutes * seconds
+        self.start_time = None
         
         # Setup mouse listener for panic button
         self.mouse_listener = None
@@ -179,9 +185,11 @@ class AutoFisher:
         """Main fishing loop"""
         print("Auto-fisher starting in 5 seconds...")
         print("Press LEFT CLICK to stop the script at any time")
+        print(f"Safety timer: Bot will auto-stop after {self.safety_stop_timer/3600:.1f} hour(s)")
         time.sleep(5)
         
         self.running = True
+        self.start_time = time.time()  # Record start time for safety timer
         catches = 0
         resets = 0
         
@@ -194,6 +202,13 @@ class AutoFisher:
         
         while self.running and not self.stop_requested:
             try:
+                # Check safety timer
+                elapsed_time = time.time() - self.start_time
+                if elapsed_time >= self.safety_stop_timer:
+                    print(f"\nSafety timer reached ({self.safety_stop_timer/3600:.1f} hour(s))!")
+                    print("Stopping bot for safety...")
+                    break
+                
                 # Check if we need to reset due to timeout
                 if self.check_for_reset():
                     resets += 1
