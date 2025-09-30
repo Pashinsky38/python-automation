@@ -26,7 +26,7 @@ achievable by skilled players who are ready to click. This bot simulates that
 prepared, fast reaction rather than superhuman reflexes.
 
 Controls:
-- ESC: Stop the bot at any time
+- LEFT CLICK: Stop the bot at any time
 """
 
 import pyautogui
@@ -34,7 +34,7 @@ import cv2
 import numpy as np
 import time
 import random
-import keyboard
+from pynput import mouse
 
 class AutoFisher:
     def __init__(self, exclamation_image_path):
@@ -52,6 +52,7 @@ class AutoFisher:
         self.running = False
         self.last_throw_time = 0
         self.fishing_region = None
+        self.stop_requested = False
         
         # Human-like timing parameters
         self.reaction_time_min = 0.03  # Very fast minimum reaction time
@@ -71,6 +72,16 @@ class AutoFisher:
         
         # Behavior probabilities (adjust these to tune randomness)
         self.break_chance = 0.00       # 1% chance of taking a short break
+        
+        # Setup mouse listener for panic button
+        self.mouse_listener = None
+        
+    def on_click(self, x, y, button, pressed):
+        """Handle mouse click events for panic button"""
+        if pressed and button == mouse.Button.left:
+            print("Left click detected - stopping bot!")
+            self.stop_requested = True
+            return False  # Stop listener
         
     def setup_center_left_region(self):
         """Set a small focused region slightly left of screen center for exclamation marks"""
@@ -167,23 +178,22 @@ class AutoFisher:
     def run(self):
         """Main fishing loop"""
         print("Auto-fisher starting in 5 seconds...")
-        print("Press 'ESC' to stop the script")
+        print("Press LEFT CLICK to stop the script at any time")
         time.sleep(5)
         
         self.running = True
         catches = 0
         resets = 0
         
+        # Start mouse listener for panic button
+        self.mouse_listener = mouse.Listener(on_click=self.on_click)
+        self.mouse_listener.start()
+        
         # Initial throw
         self.throw_fishing_rod()
         
-        while self.running:
+        while self.running and not self.stop_requested:
             try:
-                # Check for stop command
-                if keyboard.is_pressed('esc'):
-                    print("Stopping auto-fisher...")
-                    break
-                
                 # Check if we need to reset due to timeout
                 if self.check_for_reset():
                     resets += 1
@@ -215,6 +225,10 @@ class AutoFisher:
             except KeyboardInterrupt:
                 print("Script interrupted by user")
                 break
+        
+        # Clean up mouse listener
+        if self.mouse_listener:
+            self.mouse_listener.stop()
                 
         self.running = False
         print(f"Auto-fisher stopped. Total catches: {catches}, Resets: {resets}")
