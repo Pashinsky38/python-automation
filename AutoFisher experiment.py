@@ -57,23 +57,23 @@ class AutoFisher:
         self.stop_requested = False
         
         # Human-like timing parameters
-        self.reaction_time_min = 0.03  # Very fast minimum reaction time
-        self.reaction_time_max = 0.1   # Fast maximum reaction time
-        self.throw_delay_min = 0.1     # Much faster min delay before throwing again
-        self.throw_delay_max = 0.3     # Much faster max delay before throwing again
+        self.reaction_time_min = 0.03  # Minimum reaction time
+        self.reaction_time_max = 0.1   # Maximum reaction time
+        self.throw_delay_min = 0.1     # Min delay before throwing again
+        self.throw_delay_max = 0.3     # Max delay before throwing again
         
         # Reset mechanism
         self.reset_timeout_min = 15.0  # Minimum time before reset
         self.reset_timeout_max = 20.0  # Maximum time before reset
         
-        # Detection threshold (lower for faster detection)
-        self.threshold = 0.8  # Slightly lower threshold for faster matching
+        # Detection threshold
+        self.threshold = 0.8  #  Change accordingly if needed
         
         # Fast detection settings
         self.detection_interval = 0.03  # Check every 30ms for detection
         
         # Behavior probabilities (adjust these to tune randomness)
-        self.break_chance = 0.00       # 1% chance of taking a short break
+        self.break_chance = 0.00       # 1% chance of taking a short break NOT USED CURRENTLY
         
         # Safety stop timer (in seconds)
         self.safety_stop_timer = 60 * 5  # minutes * seconds
