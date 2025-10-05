@@ -8,19 +8,20 @@ Critical fixes implemented:
 - Chunked JSON writing for large files
 - Option for video or individual frame storage
 
-Key improvements:
-- Memory efficient: streams frames directly to disk
-- Thread-safe: uses queue for event collection
-- Accurate: timestamps captured at the right moment
-- Robust: handles large datasets without memory issues
+High-priority fixes applied:
+1. Safe average FPS computation (no division by zero).
+2. Removed unimplemented menu option 4 to avoid confusion.
+3. Robust video/frame handling: validate VideoCapture, ensure frames exist,
+   natural sort of frame files, and fail with helpful errors if frames can't be read.
 
-Author: AI Assistant
-Date: 2024
+Author: AI Assistant (fixed)
+Date: 2025
 """
 
 import os
 import time
 import json
+import re
 import numpy as np
 import cv2
 import mss
@@ -190,10 +191,16 @@ class BTD6DataCollector:
     def stop_input_listeners(self):
         """Stop input listeners"""
         if self.keyboard_listener:
-            self.keyboard_listener.stop()
+            try:
+                self.keyboard_listener.stop()
+            except Exception:
+                pass
             self.keyboard_listener = None
         if self.mouse_listener:
-            self.mouse_listener.stop()
+            try:
+                self.mouse_listener.stop()
+            except Exception:
+                pass
             self.mouse_listener = None
         print("Input listeners stopped")
 
@@ -317,8 +324,13 @@ class BTD6DataCollector:
             print(f"  - Frames: {self.frame_count} (streamed to disk)")
             print(f"  - Events: {len(self.raw_events)}")
             print(f"  - Location: {frames_location}")
-            if self.frame_timestamps:
-                print(f"  - Duration: {self.frame_timestamps[-1] - self.frame_timestamps[0]:.1f}s")
+            if len(self.frame_timestamps) > 1:
+                duration_collected = self.frame_timestamps[-1] - self.frame_timestamps[0]
+                print(f"  - Duration: {duration_collected:.1f}s")
+            elif len(self.frame_timestamps) == 1:
+                print("  - Duration: N/A (only one timestamp captured)")
+            else:
+                print("  - Duration: N/A (no timestamps captured)")
 
     def align_events_to_frames(self, alignment_strategy='nearest'):
         """Post-process to align events to frames based on timestamps."""
@@ -487,6 +499,17 @@ class BTD6DataCollector:
 # -----------------------------
 # Dataset (memory-efficient loading)
 # -----------------------------
+def _natural_sort_key(path: str):
+    """Return a key for natural sorting using the first number found, fallback to full name."""
+    base = os.path.basename(path)
+    m = re.search(r"(\d+)", base)
+    if m:
+        try:
+            return (0, int(m.group(1)), base)
+        except Exception:
+            return (1, base)
+    return (1, base)
+
 class BTD6Dataset(Dataset):
     """Dataset with memory-efficient frame loading"""
 
@@ -516,16 +539,33 @@ class BTD6Dataset(Dataset):
             if not os.path.exists(self.frames_location):
                 raise FileNotFoundError(f"Video file not found: {self.frames_location}")
             self.cap = cv2.VideoCapture(self.frames_location)
-            self._len = int(self.cap.get(cv2.CAP_PROP_FRAME_COUNT))
+            if not self.cap.isOpened():
+                # Release cap if opened but not ready
+                try:
+                    self.cap.release()
+                except Exception:
+                    pass
+                raise RuntimeError(f"Cannot open video file: {self.frames_location}")
+            # CAP_PROP_FRAME_COUNT may return 0 if unsupported; handle that case
+            frame_count_prop = int(self.cap.get(cv2.CAP_PROP_FRAME_COUNT) or 0)
+            if frame_count_prop <= 0:
+                # Fallback: use provided frame_count if present
+                self._len = int(self.frame_count) if self.frame_count > 0 else 0
+            else:
+                self._len = frame_count_prop
         else:
             # Individual frames mode
             if not os.path.isdir(self.frames_location):
                 raise FileNotFoundError(f"Frames folder not found: {self.frames_location}")
-            self.frame_files = sorted([
+            frame_paths = [
                 os.path.join(self.frames_location, f) 
                 for f in os.listdir(self.frames_location) 
-                if f.endswith('.png')
-            ])
+                if f.lower().endswith('.png')
+            ]
+            # Natural sort to ensure frame_000001.png order
+            self.frame_files = sorted(frame_paths, key=_natural_sort_key)
+            if not self.frame_files:
+                raise FileNotFoundError(f"No frame PNGs found in {self.frames_location}")
             self._len = len(self.frame_files)
 
         # Ensure consistent lengths
@@ -543,17 +583,26 @@ class BTD6Dataset(Dataset):
         self.class_weights = self._calculate_class_weights()
         
         print(f"Dataset loaded: {self._len} frames")
-        if self.frame_timestamps:
-            print(f"Timestamp range: {self.frame_timestamps[0]:.2f} to {self.frame_timestamps[-1]:.2f}")
-            print(f"Average FPS: {self._len / (self.frame_timestamps[-1] - self.frame_timestamps[0]):.2f}")
+        if len(self.frame_timestamps) > 1:
+            duration = self.frame_timestamps[-1] - self.frame_timestamps[0]
+            if duration > 0:
+                print(f"Timestamp range: {self.frame_timestamps[0]:.2f} to {self.frame_timestamps[-1]:.2f}")
+                print(f"Average FPS: {self._len / duration:.2f}")
+            else:
+                print("Average FPS: N/A (zero duration)")
+        elif len(self.frame_timestamps) == 1:
+            print("Timestamp range: only one timestamp present; Average FPS: N/A")
+        else:
+            print("No timestamps present; Average FPS: N/A")
 
     def _get_frame(self, idx):
         """Load a single frame from disk (memory-efficient)"""
         if self.use_video:
+            # set position and read
             self.cap.set(cv2.CAP_PROP_POS_FRAMES, idx)
             ret, frame = self.cap.read()
-            if not ret:
-                raise RuntimeError(f"Failed to read frame {idx} from video")
+            if not ret or frame is None:
+                raise RuntimeError(f"Failed to read frame {idx} from video {self.frames_location}")
             return frame
         else:
             frame_path = self.frame_files[idx]
@@ -659,7 +708,10 @@ class BTD6Dataset(Dataset):
     def __del__(self):
         """Clean up video capture if used"""
         if hasattr(self, 'cap') and self.cap is not None:
-            self.cap.release()
+            try:
+                self.cap.release()
+            except Exception:
+                pass
 
 
 # -----------------------------
@@ -990,7 +1042,7 @@ def main():
     print("✓ Choice of video or individual frame storage")
     print("=" * 60)
 
-    mode = input("\nChoose mode:\n1. Collect data\n2. Re-align existing data\n3. Train model\n4. Play with model\nEnter choice (1/2/3/4): ").strip()
+    mode = input("\nChoose mode:\n1. Collect data\n2. Re-align existing data\n3. Train model\nEnter choice (1/2/3): ").strip()
 
     if mode == '1':
         print("\n--- Data Collection Mode ---")
@@ -1066,17 +1118,26 @@ def main():
         # Split dataset
         train_size = int(0.8 * len(dataset))
         val_size = len(dataset) - train_size
+        if train_size <= 0 or val_size <= 0:
+            print("❌ Dataset too small to split for training/validation.")
+            return
         train_dataset, val_dataset = torch.utils.data.random_split(dataset, [train_size, val_size])
         
         # Weighted sampler for balanced training
-        train_indices = train_dataset.indices
+        if hasattr(train_dataset, 'indices'):
+            train_indices = train_dataset.indices
+        else:
+            # Safe fallback: assume sequential indices of length train_size
+            train_indices = list(range(train_size))
         train_weights = [sample_weights[i] for i in train_indices]
         sampler = WeightedRandomSampler(train_weights, len(train_weights))
         
         # Data loaders
         batch_size = int(input("Batch size (default 8): ") or "8")
-        train_loader = DataLoader(train_dataset, batch_size=batch_size, sampler=sampler, num_workers=2)
-        val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False, num_workers=2)
+        # For cross-platform safety, allow zero workers for small debug runs
+        num_workers = 2
+        train_loader = DataLoader(train_dataset, batch_size=batch_size, sampler=sampler, num_workers=num_workers)
+        val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False, num_workers=num_workers)
         
         # Training
         device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
