@@ -11,7 +11,7 @@ Wordle solver (interactive) - Optimized version
 
 Usage:
   python wordle_solver.py         # interactive (uses valid-wordle-words.txt)
-  python wordle_solver.py --auto secretword   # auto-solve simulation
+  python wordle_solver.py --auto secretWord   # auto-solve simulation
   python wordle_solver.py --words words.txt   # use custom word list
 
 Author: ChatGPT (GPT-5 Thinking mini) - Optimized by Claude
