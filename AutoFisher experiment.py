@@ -76,7 +76,7 @@ class AutoFisher:
         self.break_chance = 0.00       # 1% chance of taking a short break NOT USED CURRENTLY
         
         # Safety stop timer (in seconds)
-        self.safety_stop_timer = 60 * 30  # minutes * seconds
+        self.safety_stop_timer = 60 * 30      # minutes * seconds
         self.start_time = None
         
         # Setup mouse listener for panic button
