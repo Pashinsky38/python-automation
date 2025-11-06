@@ -11,7 +11,7 @@ How it works:
 - Automatically throws the rod again after catching
 - Includes reset mechanism if no fish is caught within timeout period
 - Adds human-like reaction delays and random behaviors to appear more natural
-- Safety timer automatically stops the bot after 1 hour
+- Safety timer automatically stops the bot after a set time period
 
 Setup:
 1. Take a screenshot of the three exclamation marks that appear when fishing
@@ -28,7 +28,7 @@ prepared, fast reaction rather than superhuman reflexes.
 
 Controls:
 - LEFT CLICK: Stop the bot at any time
-- Automatic safety stop after 1 hour
+- Automatic safety stop after a set time period
 """
 
 import pyautogui
@@ -57,26 +57,26 @@ class AutoFisher:
         self.stop_requested = False
         
         # Human-like timing parameters
-        self.reaction_time_min = 0.03  # Minimum reaction time
-        self.reaction_time_max = 0.1   # Maximum reaction time
-        self.throw_delay_min = 0.1     # Min delay before throwing again
-        self.throw_delay_max = 0.3     # Max delay before throwing again
+        self.reaction_time_min = 0.01  # Minimum reaction time
+        self.reaction_time_max = 0.03   # Maximum reaction time
+        self.throw_delay_min = 0.05     # Min delay before throwing again
+        self.throw_delay_max = 0.1     # Max delay before throwing again
         
         # Reset mechanism
         self.reset_timeout_min = 15.0  # Minimum time before reset
         self.reset_timeout_max = 20.0  # Maximum time before reset
         
         # Detection threshold
-        self.threshold = 0.8  #  Change accordingly if needed
+        self.threshold = 0.6  #  Change accordingly if needed
         
         # Fast detection settings
-        self.detection_interval = 0.03  # Check every 30ms for detection
+        self.detection_interval = 0.01  # Check every 10ms for detection
         
         # Behavior probabilities (adjust these to tune randomness)
         self.break_chance = 0.00       # 1% chance of taking a short break NOT USED CURRENTLY
         
         # Safety stop timer (in seconds)
-        self.safety_stop_timer = 60 * 30      # minutes * seconds
+        self.safety_stop_timer = 60 * 30      # seconds * minutes
         self.start_time = None
         
         # Setup mouse listener for panic button
@@ -165,11 +165,7 @@ class AutoFisher:
         reset_delay = random.uniform(0.5, 2.0)
         time.sleep(reset_delay)
         
-        # Right click to reset (this will pull in the line if it's out, or throw if it's not)
-        pyautogui.rightClick()
-        time.sleep(0.5)  # Brief pause
-        
-        # Throw the rod again
+        # Single right click to throw again
         self.throw_fishing_rod()
         print("Fishing state reset successfully")
     

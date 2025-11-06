@@ -1,14 +1,20 @@
 #!/usr/bin/env python3
 """
-Wordle solver (interactive) - Optimized version (improved)
+Wordle Solver - Interactive and Auto-solve modes
 
-Changes vs original:
- - Removed unused numpy import.
- - Use a per-candidate-set entropy cache keyed by guess (avoid expensive sorting).
- - Add a fast letter-frequency heuristic prefilter to limit expensive entropy computations.
- - Use a small meaningful candidate bonus as tie-breaker.
- - Minor tuning of pooling thresholds.
-Author: ChatGPT (GPT-5 Thinking mini). Edited by assistant.
+An optimized Wordle solver that uses information theory (entropy calculation) to 
+suggest the best guesses. Features include:
+- Interactive mode: helps you solve Wordle step-by-step with optimal suggestions
+- Auto-solve mode: simulates solving for a given secret word
+- Entropy-based guess selection with heuristic prefiltering for performance
+- Smart caching to avoid redundant calculations
+- Pre-computed optimal starting words for faster first guesses
+
+Usage:
+  Interactive mode: python wordle_solver.py --words wordlist.txt
+  Auto-solve mode:  python wordle_solver.py --words wordlist.txt --auto SOLVE
+
+Requires a text file containing valid 5-letter words (one per line).
 """
 
 from collections import Counter, defaultdict
@@ -23,21 +29,6 @@ DEFAULT_WORD_FILE = "valid-wordle-words.txt"
 
 # Pre-computed best starting words
 BEST_STARTING_WORDS = ["salet", "roate", "raise", "crane", "slate", "crate", "trace", "carte"]
-
-# Small fallback list (kept shortened here; expand if you want full fallback)
-FALLBACK_WORDS = [
-    "about", "above", "actor", "acute", "admit", "adopt", "adult", "after",
-    "again", "agent", "agree", "ahead", "alarm", "album", "alert", "alien",
-    "align", "alike", "alive", "allow", "alone", "along", "alter", "anger",
-    "angle", "angry", "apart", "apple", "apply", "arena", "argue", "arise",
-    "array", "aside", "asset", "audio", "audit", "avoid", "award", "aware",
-    "badly", "baker", "bases", "basic", "basin", "basis", "beach", "began",
-    "begin", "being", "below", "bench", "billy", "birth", "black", "blade",
-    "blame", "blank", "blast", "bleed", "blend", "bless", "blind", "block",
-    "blood", "bloom", "board", "boost", "booth", "bound", "brain", "brand",
-    "brass", "brave", "bread", "break", "breed", "brief", "bring", "broad",
-    "broke", "brown", "build", "built", "buyer", "cable", "calif", "carry"
-]
 
 # ---------- tuning ----------
 GET_FEEDBACK_CACHE = 200_000   # lru_cache for get_feedback
@@ -371,23 +362,19 @@ def main():
     elif os.path.exists(DEFAULT_WORD_FILE):
         word_file = DEFAULT_WORD_FILE
     else:
-        word_file = None
+        print(f"Error: Word file '{DEFAULT_WORD_FILE}' not found and no --words argument provided.")
+        print("Please provide a word list file using --words argument.")
+        sys.exit(1)
 
-    if word_file:
-        try:
-            words = load_words_from_file(word_file)
-            if not words:
-                print(f"No valid 5-letter words found in {word_file}; using fallback list.")
-                words = FALLBACK_WORDS
-            else:
-                print(f"Loaded {len(words)} words from {word_file}")
-        except Exception as e:
-            print(f"Failed to load words file '{word_file}': {e}")
-            print("Using fallback word list.")
-            words = FALLBACK_WORDS
-    else:
-        print(f"Word file '{DEFAULT_WORD_FILE}' not found; using fallback list.")
-        words = FALLBACK_WORDS
+    try:
+        words = load_words_from_file(word_file)
+        if not words:
+            print(f"Error: No valid 5-letter words found in {word_file}")
+            sys.exit(1)
+        print(f"Loaded {len(words)} words from {word_file}")
+    except Exception as e:
+        print(f"Error: Failed to load words file '{word_file}': {e}")
+        sys.exit(1)
 
     allowed_guesses = words
     print(f"Initializing solver with {len(words)} candidate words...")
