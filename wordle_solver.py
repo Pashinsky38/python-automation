@@ -1,20 +1,13 @@
 #!/usr/bin/env python3
 """
-Wordle Solver - Interactive and Auto-solve modes
+Wordle Solver with Enhanced Tkinter GUI
 
-An optimized Wordle solver that uses information theory (entropy calculation) to 
-suggest the best guesses. Features include:
-- Interactive mode: helps you solve Wordle step-by-step with optimal suggestions
-- Auto-solve mode: simulates solving for a given secret word
-- Entropy-based guess selection with heuristic prefiltering for performance
-- Smart caching to avoid redundant calculations
-- Pre-computed optimal starting words for faster first guesses
+Beautiful, user-friendly GUI with modern styling and visual feedback.
 
 Usage:
-  Interactive mode: python wordle_solver.py --words wordlist.txt
-  Auto-solve mode:  python wordle_solver.py --words wordlist.txt --auto SOLVE
+  python wordle_solver_gui.py --words valid-wordle-words.txt
 
-Requires a text file containing valid 5-letter words (one per line).
+Dependencies: Python 3.x, tkinter
 """
 
 from collections import Counter, defaultdict
@@ -23,31 +16,38 @@ import argparse
 import sys
 import os
 from functools import lru_cache
+import tkinter as tk
+from tkinter import ttk, filedialog, messagebox
 
-# Default word file name
+# ---------- constants & tuning ----------
 DEFAULT_WORD_FILE = "valid-wordle-words.txt"
-
-# Pre-computed best starting words
 BEST_STARTING_WORDS = ["salet", "roate", "raise", "crane", "slate", "crate", "trace", "carte"]
+GET_FEEDBACK_CACHE = 200_000
+HEURISTIC_TOP_K = 400
+CANDIDATE_BONUS = 1e-3
 
-# ---------- tuning ----------
-GET_FEEDBACK_CACHE = 200_000   # lru_cache for get_feedback
-HEURISTIC_TOP_K = 400         # compute exact entropy for top-K by heuristic
-CANDIDATE_BONUS = 1e-3        # small tie-breaker bonus for guesses that are also candidates
+# Color scheme
+COLORS = {
+    'bg': '#1a1a2e',
+    'panel': '#16213e',
+    'accent': '#0f3460',
+    'highlight': '#533483',
+    'text': '#eee',
+    'gray': '#787c7e',
+    'yellow': '#c9b458',
+    'green': '#6aaa64',
+    'button': '#818384',
+    'button_hover': '#9a9b9c',
+    'success': '#538d4e',
+    'error': '#d94744'
+}
 
-# ---------- feedback & checking utilities ----------
+# ---------- feedback utilities ----------
 @lru_cache(maxsize=GET_FEEDBACK_CACHE)
 def get_feedback(guess: str, solution: str):
-    """
-    Return feedback tuple for guess vs solution using integer encoding:
-    2 : correct position (green)
-    1 : present wrong position (yellow)
-    0 : not present (gray)
-    """
     feedback = [0] * 5
     solution_chars = list(solution)
 
-    # Greens first
     for i in range(5):
         if guess[i] == solution[i]:
             feedback[i] = 2
@@ -55,7 +55,6 @@ def get_feedback(guess: str, solution: str):
 
     remaining = Counter(ch for ch in solution_chars if ch is not None)
 
-    # Yellows / grays
     for i in range(5):
         if feedback[i] == 2:
             continue
@@ -70,16 +69,13 @@ def get_feedback(guess: str, solution: str):
 def feedback_to_key(feedback):
     return ''.join(str(int(f)) for f in feedback)
 
-
 # ---------- solver core ----------
 class WordleSolver:
     def __init__(self, candidates):
-        # normalize/dedupe
         self.candidates = list(dict.fromkeys(w.lower() for w in candidates if len(w) == 5 and w.isalpha()))
         self.candidates_set = set(self.candidates)
         self.history = []
         self.initial_size = len(self.candidates)
-        # entropy cache keyed by guess for the CURRENT candidate set
         self._entropy_cache = {}
 
     def filter_candidates(self, guess: str, feedback):
@@ -87,16 +83,10 @@ class WordleSolver:
         removed = len(self.candidates) - len(new_candidates)
         self.candidates = new_candidates
         self.candidates_set = set(new_candidates)
-        # candidate set changed -> clear entropy cache
         self._entropy_cache.clear()
         return removed
 
     def _compute_entropy(self, guess, candidates):
-        """
-        Compute expected information (entropy) for a guess given current candidates.
-        Cache results by guess for the current candidate set (cache cleared when candidates change).
-        """
-        # simple cache: entropy depends only on guess and current candidate set
         if guess in self._entropy_cache:
             return self._entropy_cache[guess]
 
@@ -116,13 +106,9 @@ class WordleSolver:
         return result
 
     def _heuristic_score(self, guess, candidates):
-        """
-        Fast heuristic: sum of letter frequencies across current candidates (unique letters per guess).
-        Cheap and effective to prefilter guesses for full entropy computation.
-        """
         freq = Counter()
         for w in candidates:
-            freq.update(set(w))  # count each letter once per candidate word
+            freq.update(set(w))
         return sum(freq[ch] for ch in set(guess))
 
     def _get_best_starting_words(self, allowed_guesses, top_n=5):
@@ -137,10 +123,6 @@ class WordleSolver:
         return [(w, 5.0) for w in available[:top_n]]
 
     def suggest_next(self, allowed_guesses=None, top_n=1):
-        """
-        Suggest next guesses. Uses heuristic prefilter when the allowed guess pool is large.
-        Returns list of (word, score).
-        """
         if allowed_guesses is None:
             allowed_guesses = self.candidates
 
@@ -153,13 +135,11 @@ class WordleSolver:
         if len(self.candidates) <= 2:
             return [(w, 1.0) for w in self.candidates[:top_n]]
 
-        # starting guess optimization
         if len(self.candidates) == self.initial_size and not self.history:
             return self._get_best_starting_words(allowed_guesses, top_n)
 
         pool = allowed_guesses
 
-        # reduce pool aggressively for very large allowed-guess lists
         if len(pool) > 2000 and len(self.candidates) > 50:
             priority_pool = [w for w in pool if w in self.candidates_set]
             other_pool = [w for w in pool if w not in self.candidates_set]
@@ -167,7 +147,6 @@ class WordleSolver:
         elif len(pool) > 5000:
             pool = [w for w in pool if w in self.candidates_set][:1500]
 
-        # If pool still large, use heuristic to pick top-K fastest candidates for entropy calculation
         compute_pool = pool
         if len(pool) > HEURISTIC_TOP_K:
             scored = []
@@ -184,7 +163,6 @@ class WordleSolver:
             score = entropy + bonus
             results.append((guess, score, partition_count))
 
-        # If we only computed on a subset, ensure a few actual candidate words not in compute_pool are considered
         if compute_pool is not pool:
             missing_candidates = [w for w in self.candidates if w not in compute_pool]
             for w in missing_candidates[:50]:
@@ -192,7 +170,6 @@ class WordleSolver:
                 score = entropy + CANDIDATE_BONUS
                 results.append((w, score, partition_count))
 
-        # sort by score then by partition count
         results.sort(key=lambda x: (-x[1], -x[2]))
         return [(w, s) for (w, s, parts) in results[:top_n]]
 
@@ -201,55 +178,7 @@ class WordleSolver:
         removed = self.filter_candidates(guess, feedback)
         return removed
 
-
-# ---------- helper I/O / interactive flow ----------
-def parse_feedback_input(s: str):
-    s = s.strip()
-    if "," in s or " " in s:
-        parts = [p.strip() for p in s.replace(",", " ").split()]
-        fb = []
-        for p in parts:
-            if p == "0":
-                fb.append(0)
-            elif p == "1":
-                fb.append(1)
-            elif p == "2":
-                fb.append(2)
-            elif p == "0.5" or p == ".5":
-                fb.append(1)
-            else:
-                try:
-                    val = float(p)
-                    if math.isclose(val, 0.0):
-                        fb.append(0)
-                    elif math.isclose(val, 0.5):
-                        fb.append(1)
-                    elif math.isclose(val, 1.0):
-                        fb.append(1)
-                    elif math.isclose(val, 2.0):
-                        fb.append(2)
-                    else:
-                        fb.append(0)
-                except Exception:
-                    raise ValueError(f"Cannot parse feedback token: {p}")
-        if len(fb) != 5:
-            raise ValueError("Feedback must have 5 values.")
-        return tuple(fb)
-    else:
-        if len(s) != 5:
-            raise ValueError("Feedback must be 5 tokens (either comma-separated or 5-char compact form).")
-        fb = []
-        for ch in s:
-            if ch == "0":
-                fb.append(0)
-            elif ch == "1":
-                fb.append(1)
-            elif ch == "2":
-                fb.append(2)
-            else:
-                raise ValueError(f"Unknown feedback char: {ch}")
-        return tuple(fb)
-
+# ---------- I/O helpers ----------
 
 def load_words_from_file(path):
     words = []
@@ -262,131 +191,408 @@ def load_words_from_file(path):
                 seen.add(w)
     return words
 
+# ---------- Custom Widgets ----------
 
-def interactive_mode(solver: WordleSolver, allowed_guesses=None):
-    print("\nInteractive Wordle solver")
-    print("Type 'help' for commands, 'quit' to exit.")
-    print("After each guess you'll provide feedback in one of these formats:")
-    print("  0,1,2,0,2   or   01202   or   0 1 2 0 2")
-    print("Encoding: 0 = absent (gray), 1 = present but wrong spot (yellow), 2 = correct spot (green)\n")
+class ModernButton(tk.Canvas):
+    def __init__(self, parent, text, command, width=120, height=40, **kwargs):
+        super().__init__(parent, width=width, height=height, bg=COLORS['panel'], 
+                        highlightthickness=0, **kwargs)
+        self.command = command
+        self.text = text
+        self.width = width
+        self.height = height
+        
+        self.rect = self.create_rectangle(2, 2, width-2, height-2, 
+                                         fill=COLORS['accent'], outline='')
+        self.text_id = self.create_text(width//2, height//2, text=text, 
+                                       fill=COLORS['text'], font=('Arial', 11, 'bold'))
+        
+        self.bind('<Button-1>', lambda e: self.on_click())
+        self.bind('<Enter>', lambda e: self.on_hover())
+        self.bind('<Leave>', lambda e: self.on_leave())
+        
+    def on_hover(self):
+        self.itemconfig(self.rect, fill=COLORS['highlight'])
+        
+    def on_leave(self):
+        self.itemconfig(self.rect, fill=COLORS['accent'])
+        
+    def on_click(self):
+        if self.command:
+            self.command()
 
-    round_no = 1
-    while True:
-        print(f"\nRound {round_no}")
-        print(f"Candidates remaining: {len(solver.candidates)}")
+class FeedbackBox(tk.Canvas):
+    def __init__(self, parent, index, callback, **kwargs):
+        super().__init__(parent, width=60, height=60, bg=COLORS['panel'], 
+                        highlightthickness=0, **kwargs)
+        self.index = index
+        self.callback = callback
+        self.state = 0  # 0=gray, 1=yellow, 2=green
+        
+        self.rect = self.create_rectangle(5, 5, 55, 55, fill=COLORS['gray'], 
+                                         outline='', width=2)
+        self.text_id = self.create_text(30, 30, text='', fill=COLORS['text'], 
+                                       font=('Arial', 20, 'bold'))
+        
+        self.bind('<Button-1>', lambda e: self.toggle())
+        self.bind('<Enter>', lambda e: self.on_hover())
+        self.bind('<Leave>', lambda e: self.on_leave())
+        
+    def toggle(self):
+        self.state = (self.state + 1) % 3
+        self.update_display()
+        if self.callback:
+            self.callback(self.index, self.state)
+            
+    def set_state(self, state):
+        self.state = state
+        self.update_display()
+        
+    def set_letter(self, letter):
+        self.itemconfig(self.text_id, text=letter.upper())
+        
+    def update_display(self):
+        colors = [COLORS['gray'], COLORS['yellow'], COLORS['green']]
+        self.itemconfig(self.rect, fill=colors[self.state])
+        
+    def on_hover(self):
+        self.itemconfig(self.rect, outline='white', width=2)
+        
+    def on_leave(self):
+        self.itemconfig(self.rect, outline='', width=2)
 
-        if round_no == 1 and len(solver.candidates) > 1000:
-            print("(Using pre-computed optimal starting words for speed...)")
+# ---------- GUI ----------
+class WordleGUI:
+    def __init__(self, root, words=None):
+        self.root = root
+        self.root.title("Wordle Solver")
+        self.root.configure(bg=COLORS['bg'])
+        self.words = words or []
+        self.solver = None
+        self.allowed_guesses = None
 
-        top = solver.suggest_next(allowed_guesses=allowed_guesses, top_n=5)
-        if not top:
-            print("No candidates left. Something's inconsistent with the feedback provided.")
+        self._build_ui()
+        if self.words:
+            self._init_solver(self.words)
+
+    def _build_ui(self):
+        # Main container
+        main_container = tk.Frame(self.root, bg=COLORS['bg'])
+        main_container.pack(fill=tk.BOTH, expand=True, padx=20, pady=20)
+        
+        # Header
+        header = tk.Frame(main_container, bg=COLORS['bg'])
+        header.pack(fill=tk.X, pady=(0, 20))
+        
+        title = tk.Label(header, text="🔤 WORDLE SOLVER", 
+                        font=('Arial', 24, 'bold'), 
+                        fg=COLORS['text'], bg=COLORS['bg'])
+        title.pack(side=tk.LEFT)
+        
+        # File controls
+        file_frame = tk.Frame(header, bg=COLORS['bg'])
+        file_frame.pack(side=tk.RIGHT)
+        
+        self.btn_load = ModernButton(file_frame, "📁 Load Words", 
+                                     command=self._on_load_file, width=120, height=35)
+        self.btn_load.pack(side=tk.LEFT, padx=5)
+        
+        self.lbl_wordfile = tk.Label(file_frame, text="No file loaded", 
+                                     font=('Arial', 10), 
+                                     fg=COLORS['button'], bg=COLORS['bg'])
+        self.lbl_wordfile.pack(side=tk.LEFT, padx=10)
+        
+        # Main content area
+        content = tk.Frame(main_container, bg=COLORS['bg'])
+        content.pack(fill=tk.BOTH, expand=True)
+        
+        # Left panel - Input
+        left_panel = tk.Frame(content, bg=COLORS['panel'], relief=tk.FLAT, bd=0)
+        left_panel.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(0, 10))
+        
+        # Guess input section
+        input_section = tk.Frame(left_panel, bg=COLORS['panel'])
+        input_section.pack(fill=tk.X, padx=20, pady=20)
+        
+        tk.Label(input_section, text="Enter Your Guess", 
+                font=('Arial', 14, 'bold'), 
+                fg=COLORS['text'], bg=COLORS['panel']).pack(anchor=tk.W, pady=(0, 10))
+        
+        self.entry_guess = tk.Entry(input_section, font=('Arial', 16), 
+                                    bg=COLORS['accent'], fg=COLORS['text'],
+                                    insertbackground=COLORS['text'], relief=tk.FLAT,
+                                    justify=tk.CENTER)
+        self.entry_guess.pack(fill=tk.X, ipady=8)
+        self.entry_guess.bind('<KeyRelease>', self._on_guess_change)
+        
+        # Feedback boxes
+        tk.Label(input_section, text="Click boxes to set feedback", 
+                font=('Arial', 12), 
+                fg=COLORS['button'], bg=COLORS['panel']).pack(pady=(15, 5))
+        
+        fb_container = tk.Frame(input_section, bg=COLORS['panel'])
+        fb_container.pack(pady=10)
+        
+        self.fb_boxes = []
+        for i in range(5):
+            box = FeedbackBox(fb_container, i, self._on_feedback_change)
+            box.pack(side=tk.LEFT, padx=3)
+            self.fb_boxes.append(box)
+        
+        # Action buttons
+        btn_frame = tk.Frame(input_section, bg=COLORS['panel'])
+        btn_frame.pack(pady=(20, 0))
+        
+        self.btn_apply = ModernButton(btn_frame, "✓ Apply Feedback", 
+                                      command=self._on_apply_feedback, 
+                                      width=180, height=45)
+        self.btn_apply.pack(side=tk.LEFT, padx=5)
+        
+        self.btn_reset = ModernButton(btn_frame, "↻ Reset", 
+                                      command=self._on_reset, 
+                                      width=100, height=45)
+        self.btn_reset.pack(side=tk.LEFT, padx=5)
+        
+        # Status
+        self.lbl_status = tk.Label(input_section, text="", 
+                                   font=('Arial', 11), 
+                                   fg=COLORS['success'], bg=COLORS['panel'])
+        self.lbl_status.pack(pady=(15, 0))
+        
+        # History section
+        history_section = tk.Frame(left_panel, bg=COLORS['panel'])
+        history_section.pack(fill=tk.BOTH, expand=True, padx=20, pady=(0, 20))
+        
+        tk.Label(history_section, text="History", 
+                font=('Arial', 14, 'bold'), 
+                fg=COLORS['text'], bg=COLORS['panel']).pack(anchor=tk.W, pady=(0, 10))
+        
+        history_scroll_frame = tk.Frame(history_section, bg=COLORS['accent'])
+        history_scroll_frame.pack(fill=tk.BOTH, expand=True)
+        
+        self.history_canvas = tk.Canvas(history_scroll_frame, bg=COLORS['accent'], 
+                                       highlightthickness=0)
+        self.history_canvas.pack(fill=tk.BOTH, expand=True)
+        
+        # Right panel - Suggestions
+        right_panel = tk.Frame(content, bg=COLORS['panel'], relief=tk.FLAT, bd=0)
+        right_panel.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        
+        # Candidates count
+        count_frame = tk.Frame(right_panel, bg=COLORS['panel'])
+        count_frame.pack(fill=tk.X, padx=20, pady=20)
+        
+        tk.Label(count_frame, text="Remaining Candidates", 
+                font=('Arial', 12), 
+                fg=COLORS['button'], bg=COLORS['panel']).pack(anchor=tk.W)
+        
+        self.lbl_count = tk.Label(count_frame, text="0", 
+                                 font=('Arial', 32, 'bold'), 
+                                 fg=COLORS['text'], bg=COLORS['panel'])
+        self.lbl_count.pack(anchor=tk.W)
+        
+        # Suggestions section
+        suggest_section = tk.Frame(right_panel, bg=COLORS['panel'])
+        suggest_section.pack(fill=tk.BOTH, expand=True, padx=20, pady=(0, 20))
+        
+        suggest_header = tk.Frame(suggest_section, bg=COLORS['panel'])
+        suggest_header.pack(fill=tk.X, pady=(0, 10))
+        
+        tk.Label(suggest_header, text="Top Suggestions", 
+                font=('Arial', 14, 'bold'), 
+                fg=COLORS['text'], bg=COLORS['panel']).pack(side=tk.LEFT)
+        
+        tk.Label(suggest_header, text="Show:", 
+                font=('Arial', 10), 
+                fg=COLORS['button'], bg=COLORS['panel']).pack(side=tk.LEFT, padx=(20, 5))
+        
+        self.spin_suggest = tk.Spinbox(suggest_header, from_=1, to=20, width=3,
+                                      font=('Arial', 10), bg=COLORS['accent'],
+                                      fg=COLORS['text'], buttonbackground=COLORS['accent'],
+                                      relief=tk.FLAT)
+        self.spin_suggest.delete(0, tk.END)
+        self.spin_suggest.insert(0, "8")
+        self.spin_suggest.pack(side=tk.LEFT)
+        
+        refresh_btn = ModernButton(suggest_header, "↻", command=self.update_ui, 
+                                  width=40, height=30)
+        refresh_btn.pack(side=tk.LEFT, padx=(5, 0))
+        
+        # Suggestions list
+        suggest_scroll_frame = tk.Frame(suggest_section, bg=COLORS['accent'])
+        suggest_scroll_frame.pack(fill=tk.BOTH, expand=True)
+        
+        self.suggest_canvas = tk.Canvas(suggest_scroll_frame, bg=COLORS['accent'], 
+                                       highlightthickness=0)
+        self.suggest_canvas.pack(fill=tk.BOTH, expand=True)
+
+    def _on_guess_change(self, event):
+        guess = self.entry_guess.get().lower()
+        for i, box in enumerate(self.fb_boxes):
+            if i < len(guess):
+                box.set_letter(guess[i])
+            else:
+                box.set_letter('')
+
+    def _on_feedback_change(self, index, state):
+        pass  # Feedback updated by the box itself
+
+    def _on_load_file(self):
+        path = filedialog.askopenfilename(
+            title="Select wordlist file", 
+            filetypes=[("Text files", "*.txt"), ("All files","*")])
+        if not path:
             return
-
-        print("Top suggestions (word : expected-info score):")
-        for w, sc in top:
-            print(f"  {w:10}  {sc:.4f}")
-
-        if len(solver.candidates) <= 50:
-            print("\nCurrent candidates:", ", ".join(solver.candidates))
-
-        guess = input("Enter your guess (or press Enter to pick the top suggestion): ").strip().lower()
-        if guess == "":
-            guess = top[0][0]
-            print("Picking:", guess)
-        if guess == "help":
-            print("Commands: 'help', 'quit', 'candidates', 'history'")
-            continue
-        if guess == "quit":
-            return
-        if guess == "candidates":
-            print(", ".join(solver.candidates))
-            continue
-        if guess == "history":
-            for g, fb in solver.history:
-                print(f"{g} -> {feedback_to_key(fb)}")
-            continue
-
-        if len(guess) != 5 or not guess.isalpha():
-            print("Guess must be a 5-letter word.")
-            continue
-
-        fb_in = input("Enter feedback for that guess (e.g. 0,1,2,0,2): ").strip()
         try:
-            fb = parse_feedback_input(fb_in)
-        except ValueError as e:
-            print("Could not parse feedback:", e)
-            continue
+            words = load_words_from_file(path)
+            if not words:
+                messagebox.showerror("Error", f"No valid 5-letter words found in {path}")
+                return
+            self.lbl_wordfile.config(text=f"✓ {os.path.basename(path)}", fg=COLORS['success'])
+            self.words = words
+            self._init_solver(words)
+            self.update_ui()
+        except Exception as e:
+            messagebox.showerror("Error", f"Failed to load words: {e}")
 
-        removed = solver.add_history(guess, fb)
-        print(f"Pruned {removed} words; {len(solver.candidates)} candidates remain.")
-        if len(solver.candidates) == 1:
-            print("Solved! The word is:", solver.candidates[0])
+    def _init_solver(self, words):
+        self.allowed_guesses = words
+        self.solver = WordleSolver(candidates=words)
+        self.entry_guess.delete(0, tk.END)
+        for box in self.fb_boxes:
+            box.set_state(0)
+            box.set_letter('')
+        self.update_ui()
+
+    def update_ui(self):
+        if not self.solver:
             return
-        if all(f == 2 for f in fb):
-            print("All green — solved!")
+        
+        cnt = len(self.solver.candidates)
+        self.lbl_count.config(text=str(cnt))
+        
+        try:
+            topn = int(self.spin_suggest.get())
+        except Exception:
+            topn = 8
+        
+        top = self.solver.suggest_next(allowed_guesses=self.allowed_guesses, top_n=topn)
+        
+        # Clear and redraw suggestions
+        self.suggest_canvas.delete('all')
+        y_pos = 10
+        for i, (word, score) in enumerate(top):
+            # Create clickable suggestion box
+            box_height = 50
+            rect = self.suggest_canvas.create_rectangle(
+                10, y_pos, 380, y_pos + box_height,
+                fill=COLORS['bg'], outline='', tags=f'sug_{i}')
+            
+            word_text = self.suggest_canvas.create_text(
+                20, y_pos + 25, text=word.upper(), 
+                font=('Arial', 16, 'bold'), fill=COLORS['text'], 
+                anchor=tk.W, tags=f'sug_{i}')
+            
+            score_text = self.suggest_canvas.create_text(
+                370, y_pos + 25, text=f'{score:.3f}', 
+                font=('Arial', 11), fill=COLORS['button'], 
+                anchor=tk.E, tags=f'sug_{i}')
+            
+            # Bind click event
+            self.suggest_canvas.tag_bind(f'sug_{i}', '<Button-1>', 
+                                        lambda e, w=word: self._use_word(w))
+            self.suggest_canvas.tag_bind(f'sug_{i}', '<Enter>', 
+                                        lambda e, r=rect: self.suggest_canvas.itemconfig(r, fill=COLORS['accent']))
+            self.suggest_canvas.tag_bind(f'sug_{i}', '<Leave>', 
+                                        lambda e, r=rect: self.suggest_canvas.itemconfig(r, fill=COLORS['bg']))
+            
+            y_pos += box_height + 5
+        
+        # Update history
+        self.history_canvas.delete('all')
+        y_pos = 10
+        for guess, fb in reversed(self.solver.history[-10:]):  # Show last 10
+            # Draw word boxes
+            for i, (letter, state) in enumerate(zip(guess, fb)):
+                colors = [COLORS['gray'], COLORS['yellow'], COLORS['green']]
+                x = 10 + i * 55
+                self.history_canvas.create_rectangle(
+                    x, y_pos, x + 50, y_pos + 50,
+                    fill=colors[state], outline='')
+                self.history_canvas.create_text(
+                    x + 25, y_pos + 25, text=letter.upper(),
+                    font=('Arial', 18, 'bold'), fill='white')
+            y_pos += 60
+
+    def _use_word(self, word):
+        self.entry_guess.delete(0, tk.END)
+        self.entry_guess.insert(0, word)
+        for i, letter in enumerate(word):
+            self.fb_boxes[i].set_letter(letter)
+
+    def _on_apply_feedback(self):
+        guess = self.entry_guess.get().strip().lower()
+        if not guess or len(guess) != 5 or not guess.isalpha():
+            self.lbl_status.config(text="⚠ Guess must be a 5-letter word", fg=COLORS['error'])
             return
-        round_no += 1
+        
+        fb = tuple(box.state for box in self.fb_boxes)
+        removed = self.solver.add_history(guess, fb)
+        
+        remaining = len(self.solver.candidates)
+        self.lbl_status.config(
+            text=f"✓ Pruned {removed} words, {remaining} remain", 
+            fg=COLORS['success'])
+        
+        # Reset input
+        self.entry_guess.delete(0, tk.END)
+        for box in self.fb_boxes:
+            box.set_state(0)
+            box.set_letter('')
+        
+        self.update_ui()
+        
+        if remaining == 1:
+            self.lbl_status.config(
+                text=f"🎉 Solved! The word is: {self.solver.candidates[0].upper()}", 
+                fg=COLORS['success'])
 
+    def _on_reset(self):
+        if not self.words:
+            return
+        if messagebox.askyesno("Reset", "Reset solver to initial state?"):
+            self._init_solver(self.words)
+            self.lbl_status.config(text="")
 
-def auto_solve(secret, solver: WordleSolver, allowed_guesses=None, max_rounds=6):
-    secret = secret.lower()
-    if len(secret) != 5 or not secret.isalpha():
-        raise ValueError("Secret must be a 5-letter word.")
-    print("Auto-solve simulation for secret:", secret)
-    for round_no in range(1, max_rounds + 1):
-        suggestion = solver.suggest_next(allowed_guesses=allowed_guesses, top_n=1)
-        if not suggestion:
-            print("No suggestions available; failed.")
-            return False
-        guess = suggestion[0][0]
-        fb = get_feedback(guess, secret)
-        print(f"Round {round_no}: guess={guess}  feedback={feedback_to_key(fb)}")
-        solver.add_history(guess, fb)
-        if all(x == 2 for x in fb):
-            print(f"Solved in {round_no} rounds.")
-            return True
-    print(f"Failed to solve within {max_rounds} rounds.")
-    return False
-
+# ---------- main ----------
 
 def main():
-    parser = argparse.ArgumentParser(description="Wordle solver (interactive / auto)")
-    parser.add_argument("--words", help="Path to word list file (one 5-letter word per line).", default=None)
-    parser.add_argument("--auto", help="Auto-solve for the provided secret word (simulate).", default=None)
-    parser.add_argument("--max-rounds", type=int, default=6, help="Max rounds for auto-solve.")
+    parser = argparse.ArgumentParser(description="Wordle solver GUI")
+    parser.add_argument("--words", help="Path to word list file", default=None)
     args = parser.parse_args()
 
+    word_file = None
     if args.words:
+        if not os.path.exists(args.words):
+            print(f"Word file '{args.words}' not found.")
+            sys.exit(1)
         word_file = args.words
     elif os.path.exists(DEFAULT_WORD_FILE):
         word_file = DEFAULT_WORD_FILE
-    else:
-        print(f"Error: Word file '{DEFAULT_WORD_FILE}' not found and no --words argument provided.")
-        print("Please provide a word list file using --words argument.")
-        sys.exit(1)
 
-    try:
-        words = load_words_from_file(word_file)
-        if not words:
-            print(f"Error: No valid 5-letter words found in {word_file}")
-            sys.exit(1)
-        print(f"Loaded {len(words)} words from {word_file}")
-    except Exception as e:
-        print(f"Error: Failed to load words file '{word_file}': {e}")
-        sys.exit(1)
+    words = []
+    if word_file:
+        try:
+            words = load_words_from_file(word_file)
+            print(f"Loaded {len(words)} words from {word_file}")
+        except Exception as e:
+            print(f"Failed to load words: {e}")
 
-    allowed_guesses = words
-    print(f"Initializing solver with {len(words)} candidate words...")
-    solver = WordleSolver(candidates=words)
-
-    if args.auto:
-        success = auto_solve(args.auto, solver, allowed_guesses=allowed_guesses, max_rounds=args.max_rounds)
-        if not success:
-            print("Candidates left (top 20):", solver.candidates[:20])
-    else:
-        interactive_mode(solver, allowed_guesses=allowed_guesses)
-
+    root = tk.Tk()
+    app = WordleGUI(root, words=words)
+    root.geometry('1000x700')
+    root.minsize(900, 650)
+    root.mainloop()
 
 if __name__ == "__main__":
     main()
