@@ -67,7 +67,7 @@ class AutoFisher:
         self.reset_timeout_max = 20.0  # Maximum time before reset
         
         # Detection threshold
-        self.threshold = 0.6  #  Change accordingly if needed
+        self.threshold = 0.8  #  Change accordingly if needed
         
         # Fast detection settings
         self.detection_interval = 0.01  # Check every 10ms for detection
